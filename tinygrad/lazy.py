@@ -59,6 +59,51 @@ def _ast_binaryops(op:LazyOp, shape:Tuple[sint, ...]) -> LazyOp:
   ast = op.map_buffers(cast(Dict[LazyBuffer, Union[LazyOp, LazyBuffer]], real_srcs))
   return LazyOp(MovementOps.RESHAPE, (ast, ), shape) if intermediate_shape != shape else ast
 
+build_sequence:List[Tuple[LazyOp, List[LazyOp]]] = list()
+
+
+def _check_order(x:LazyOp, y:LazyOp, order = 0):
+
+  if x == y: return order 
+  if len(x.src) == 0 or len(y.src) == 0: return 0
+  x_children = [_ for _ in x.src if type(_) == LazyOp]
+  su = 0
+  for a in x_children:
+    su += _check_order(a, y, order + 1)
+  return su
+
+def _equivalent(op_a:LazyOp, op_b:LazyOp):
+  return op_a != op_b and op_a.op == op_b.op 
+def _merge(op_a:LazyOp, op_b:LazyOp):
+  temp = LazyOp(op_a.op, op_a.src + op_b.src)
+    #for a, b in zip(op_a.get_lazyops(), op_b.get_lazyops()):
+    #  if _equivalent(a, b):
+    #      _merge(a, b)
+  return temp
+
+def _total_reduction(op:LazyOp, parent:LazyOp):
+  build_sequence.append((parent, op.get_lazyops()))
+  ans = ""
+  for a in build_sequence:
+    for b in build_sequence:
+      if len(a[1]) == 0 or len(b[1]) == 0: continue
+      #if a[1][0].realized  or b[1][0].realized: continue
+      #print('we are getting {} {}'.format(type(a[1][0].op), type(b[1][0].op)))
+      x = a[1][0]
+      y = b[1][0]
+      if _equivalent(a[1][0], b[1][0]):
+        continue
+      result_a, result_b = _check_order(x, y), _check_order(y, x)
+      if result_a == 0 and result_b == 0: continue
+      if result_a > 0:
+        continue
+      if result_b > 0:
+        continue
+          #print(len(_merge(a[1][0], b[1][0]).src))
+          #print("Found a match {}\n{}\n".format(a[1][0].op, b[1][0].op))
+          #print("Checking depedency {}".format(_check_dependency(a[1][0], b[1][0])))
+  #pr    t(ans)
+
 def _replace_bufferops(op:LazyOp) -> Tuple[LazyOp, List[LazyBuffer]]:
   replacements:Dict[LazyBuffer, LazyOp] = {}
   base_bufs = dedup([x.base for x in op.buffers if not x.is_unrealized_const()])
@@ -153,6 +198,15 @@ class LazyBuffer:
     op = self.op
     if self.optype is BinaryOps: op = _ast_binaryops(op, self.shape)
     elif self.optype is ReduceOps: op = _ast_reduceops(op)
+
+
+    for x in self.op.src:
+      _total_reduction(x, self.op)
+    
+    for a in build_sequence:
+      s = ""
+      for b in a[1]:
+        s += "{} ".format(b.op)
 
     # schedule the past
     ret:List[ScheduleItem] = []
